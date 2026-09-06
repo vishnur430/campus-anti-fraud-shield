@@ -104,6 +104,7 @@ threadpoolctl==3.6.0
 tokenizers==0.23.2
 toml==0.10.2
 torch==2.14.0
+torchvision==0.29.0
 tqdm==4.70.0
 transformers==5.16.1
 truststore==0.10.4
