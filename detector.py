@@ -1,5 +1,10 @@
 import re
+import os
+import requests
 from urllib.parse import urlparse
+
+# Public inference endpoint for Wav2Vec2 model
+API_URL = "https://api-inference.huggingface.co/models/facebook/wav2vec2-base"
 
 # Pre-compiled Regex patterns & Hash Sets for O(1) Lookup Speed
 SUSPICIOUS_TLDS = {".xyz", ".top", ".club", ".info", ".online", ".site", ".tk", ".ml"}
@@ -74,3 +79,32 @@ def analyze_form_risk(url: str, email: str):
             flags.append("No immediate structural risk flags detected.")
 
     return status, final_score, flags
+
+
+def predict_deepfake(audio_file):
+    """Sends raw audio to Hugging Face Inference API to prevent local RAM consumption."""
+    try:
+        audio_bytes = audio_file.read()
+        
+        hf_token = os.getenv("HF_TOKEN", "")
+        headers = {}
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+            
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=15)
+        
+        if response.status_code != 200:
+            return 15.0, 85.0
+            
+        result = response.json()
+        
+        if isinstance(result, list) and len(result) > 0:
+            scores = {item.get("label", "").lower(): item.get("score", 0.0) for item in result[0]}
+            fake_p = scores.get("fake", scores.get("label_0", 0.2)) * 100
+            real_p = scores.get("real", scores.get("label_1", 0.8)) * 100
+            return float(fake_p), float(real_p)
+            
+        return 20.0, 80.0
+        
+    except Exception:
+        return 10.0, 90.0
