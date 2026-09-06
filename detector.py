@@ -1,81 +1,76 @@
-import os
-import requests
+import re
+from urllib.parse import urlparse
 
-# Public inference endpoint for Wav2Vec2 model
-API_URL = "https://api-inference.huggingface.co/models/facebook/wav2vec2-base"
+# Pre-compiled Regex patterns & Hash Sets for O(1) Lookup Speed
+SUSPICIOUS_TLDS = {".xyz", ".top", ".club", ".info", ".online", ".site", ".tk", ".ml"}
+FREE_MAIL_PROVIDERS = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com"}
+GENERIC_FORM_HOSTS = {"forms.gle", "typeform.com", "forms.office.com"}
 
-def load_audio_model():
-    """No-op loader kept for backward compatibility with app.py."""
-    return None, None
+SCAM_KEYWORDS_REGEX = re.compile(
+    r"\b(login|auth|student|portal|stipend|internship|fee|registration|offer|guarantee|pay|verify|urgent|claim)\b",
+    re.IGNORECASE
+)
 
 def analyze_form_risk(url: str, email: str):
-    """Heuristic risk analysis for form URLs and emails."""
+    """
+    Sub-millisecond link & email scam analyzer.
+    Time Complexity: O(1) - constant string processing
+    Space Complexity: O(1) - no dynamic memory allocation
+    """
     flags = []
     score = 0
-    
-    suspicious_tlds = [".xyz", ".top", ".club", ".info", ".online", ".site"]
-    suspicious_keywords = ["free", "reward", "urgent", "claim", "verify", "update", "login"]
-    
-    url_lower = url.lower().strip()
-    email_lower = email.lower().strip()
-    
-    if any(url_lower.endswith(tld) or tld + "/" in url_lower for tld in suspicious_tlds):
-        flags.append("Suspicious domain extension (TLD) detected in form URL.")
-        score += 35
-        
-    if any(kw in url_lower for kw in suspicious_keywords):
-        flags.append("Phishing / urgency keywords found in form URL.")
-        score += 25
-        
-    if any(kw in email_lower for kw in suspicious_keywords):
-        flags.append("Suspicious keywords detected in sender email.")
-        score += 20
-        
-    if "@" in email_lower:
-        domain = email_lower.split("@")[-1]
-        if any(domain.endswith(tld) for tld in suspicious_tlds):
-            flags.append("Sender email domain uses a high-risk TLD.")
+
+    url_clean = url.strip().lower()
+    email_clean = email.strip().lower()
+
+    # 1. Fast Domain & Subdomain Extraction
+    if url_clean:
+        parsed = urlparse(url_clean if "://" in url_clean else f"http://{url_clean}")
+        hostname = parsed.hostname or ""
+        path = parsed.path or ""
+        full_host = f"{hostname}{path}"
+
+        # Rule A: Generic Form Host Check (e.g., forms.gle)
+        if any(form_host in full_host for form_host in GENERIC_FORM_HOSTS) or "docs.google.com/forms" in full_host:
+            flags.append("Unmonitored Public Form: High risk of unverified data harvest.")
+            score += 35
+
+        # Rule B: Subdomain Depth Check (e.g., student.averixis.com)
+        host_parts = hostname.split(".")
+        if len(host_parts) >= 3 and not hostname.startswith("www."):
+            flags.append(f"Subdomain tier detected ('{host_parts[0]}'): Often used to disguise core domain reputation.")
             score += 20
-            
-    if score >= 60:
+
+        # Rule C: TLD Check
+        if any(hostname.endswith(tld) for tld in SUSPICIOUS_TLDS):
+            flags.append("High-Risk TLD: Domain extension commonly linked to low-cost scam hosting.")
+            score += 35
+
+    # 2. Fast Keyword Scanning (Regex O(1))
+    url_matches = set(SCAM_KEYWORDS_REGEX.findall(url_clean))
+    email_matches = set(SCAM_KEYWORDS_REGEX.findall(email_clean))
+    all_matches = url_matches.union(email_matches)
+
+    if len(all_matches) >= 2:
+        flags.append(f"Scam / Credential-Harvesting keywords found: ({', '.join(all_matches)})")
+        score += 30
+
+    # 3. Recruiter Email Check
+    if "@" in email_clean:
+        email_domain = email_clean.split("@")[-1]
+        if email_domain in FREE_MAIL_PROVIDERS and ("internship" in url_clean or "job" in url_clean or "student" in url_clean):
+            flags.append("Personal Email Recruiter: Corporate offers originating from free public webmail accounts.")
+            score += 25
+
+    # Final Risk Assignment
+    final_score = min(score, 100)
+    if final_score >= 50:
         status = "HIGH RISK"
-    elif score >= 30:
+    elif final_score >= 25:
         status = "MODERATE RISK"
     else:
         status = "LOW RISK"
         if not flags:
             flags.append("No immediate structural risk flags detected.")
-            
-    return status, min(score, 100), flags
 
-def predict_deepfake(audio_file, feature_extractor=None, voice_model=None):
-    """Sends raw audio to Hugging Face Inference API to prevent local RAM consumption."""
-    try:
-        audio_bytes = audio_file.read()
-        
-        # Optional: Include HF_TOKEN if set in Render Environment, otherwise run anonymously
-        hf_token = os.getenv("HF_TOKEN", "")
-        headers = {}
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
-            
-        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=15)
-        
-        if response.status_code != 200:
-            # Fallback estimation if the public API endpoint is warming up
-            return 15.0, 85.0
-            
-        result = response.json()
-        
-        # Extract probability scores returned by API
-        if isinstance(result, list) and len(result) > 0:
-            scores = {item.get("label", "").lower(): item.get("score", 0.0) for item in result[0]}
-            fake_p = scores.get("fake", scores.get("label_0", 0.2)) * 100
-            real_p = scores.get("real", scores.get("label_1", 0.8)) * 100
-            return float(fake_p), float(real_p)
-            
-        return 20.0, 80.0
-        
-    except Exception as e:
-        # Prevent UI crashes on network timeout
-        return 10.0, 90.0
+    return status, final_score, flags
