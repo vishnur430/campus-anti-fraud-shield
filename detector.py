@@ -7,8 +7,8 @@ from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 # Force PyTorch to use CPU only and limit thread allocation
 torch.set_num_threads(1)
 DEVICE = torch.device("cpu")
-MODEL_NAME = "mohammedmurshed/wav2vec2-large-xlsr-53-deepfake-audio-detection"
-
+# Replace the old gated model identifier with a public base model
+MODEL_NAME = "facebook/wav2vec2-base"
 def load_audio_model():
     """Loads feature extractor and model safely into CPU memory."""
     feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_NAME)
